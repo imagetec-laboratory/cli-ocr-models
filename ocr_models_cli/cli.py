@@ -275,6 +275,43 @@ def all(
 
 
 @app.command()
+def preload(
+    engines: str = typer.Option("all", "--engines", help="Comma-separated list of engines to preload (paddle,easyocr,tesseract) or 'all'")
+):
+    """Preload OCR model(s) to reduce initialization time on first use"""
+    manager = OCRManager()
+    
+    if engines.lower() == "all":
+        engine_list = list(manager.engines.keys())
+    else:
+        engine_list = [e.strip().lower() for e in engines.split(",")]
+    
+    console.print(Panel(f"[blue]Preloading OCR engines: {', '.join(engine_list)}[/blue]"))
+    
+    success_count = 0
+    total_start_time = time.time()
+    
+    for engine_name in engine_list:
+        if engine_name not in manager.engines:
+            console.print(f"[red]✗ Unknown engine: {engine_name}[/red]")
+            continue
+            
+        console.print(f"[cyan]Preloading {engine_name}...[/cyan]")
+        start_time = time.time()
+        
+        if manager.preload_engine(engine_name):
+            load_time = time.time() - start_time
+            console.print(f"[green]✓ {engine_name} loaded in {load_time:.2f}s[/green]")
+            success_count += 1
+        else:
+            load_time = time.time() - start_time
+            console.print(f"[red]✗ Failed to load {engine_name} ({load_time:.2f}s)[/red]")
+    
+    total_time = time.time() - total_start_time
+    console.print(f"[green]✓ Preloaded {success_count}/{len(engine_list)} engines in {total_time:.2f}s[/green]")
+
+
+@app.command()
 def batch_async(
     image_dir: str = typer.Argument(..., help="Directory containing images to process"),
     output_file: str = typer.Argument(..., help="Output NDJSON file path"),

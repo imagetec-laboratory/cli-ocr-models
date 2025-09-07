@@ -466,6 +466,22 @@ class OCRManager:
             console.print(f"[red]Error creating organized output: {str(e)}[/red]")
             return {"success": False, "error": str(e)}
 
+    def preload_engine(self, engine_name: str) -> bool:
+        """Preload a specific OCR engine to reduce initialization time"""
+        if engine_name not in self.engines:
+            return False
+        
+        engine = self.engines[engine_name]
+        
+        try:
+            if hasattr(engine, '_load_model'):
+                return engine._load_model()
+            else:
+                return True
+        except Exception as e:
+            console.print(f"[red]Error preloading {engine_name}: {str(e)}[/red]")
+            return False
+
     def run_single_engine(self, engine_name: str, image_path: str) -> Dict[str, Any]:
         if engine_name not in self.engines:
             return {"error": f"Unknown engine: {engine_name}"}
