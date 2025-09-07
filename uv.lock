@@ -652,7 +652,7 @@ dependencies = [
 requires-dist = [
     { name = "easyocr" },
     { name = "opencv-python" },
-    { name = "paddleocr", specifier = ">=2.8.1,<3.0" },
+    { name = "paddleocr" },
     { name = "paddlepaddle" },
     { name = "pillow" },
     { name = "pytesseract" },

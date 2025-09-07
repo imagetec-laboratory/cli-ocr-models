@@ -140,7 +140,7 @@ class PaddleOCREngine(OCREngine):
                 console.print(f"[yellow]Image preprocessing failed: {str(preprocess_error)}, using original[/yellow]")
                 processed_image_path = image_path
             
-            result = self._ocr.ocr(processed_image_path)
+            result = self._ocr.ocr(img=processed_image_path, cls=False)
                 
             text = ""
             boxes = []
@@ -153,7 +153,7 @@ class PaddleOCREngine(OCREngine):
                                 box, text_conf = word_info[0], word_info[1]
                                 if text_conf and len(text_conf) >= 2:
                                     word_text, confidence = text_conf[0], text_conf[1]
-                                    if confidence > 0.5:  # Filter low confidence results
+                                    if confidence >= config.MIN_TEXT_CONFIDENCE and confidence >= config.MIN_BOX_CONFIDENCE:
                                         text += word_text + " "
                                         boxes.append(box)
                 text = text.strip().replace(" ", "\n")
@@ -222,9 +222,11 @@ class EasyOCREngine(OCREngine):
         start_time = time.time()
         try:
             results = self._reader.readtext(image_path)
-            text = "\n".join([result[1] for result in results])
-            # Extract bounding boxes from EasyOCR results
-            boxes = [result[0] for result in results]
+            # Filter results based on confidence thresholds
+            filtered_results = [result for result in results if result[2] >= config.MIN_TEXT_CONFIDENCE and result[2] >= config.MIN_BOX_CONFIDENCE]
+            text = "\n".join([result[1] for result in filtered_results])
+            # Extract bounding boxes from filtered EasyOCR results
+            boxes = [result[0] for result in filtered_results]
             processing_time = time.time() - start_time
             
             return {
@@ -261,12 +263,20 @@ class TesseractEngine(OCREngine):
             
             # Get bounding box data from Tesseract
             boxes = []
+            filtered_text_parts = []
             try:
                 data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
                 for i in range(len(data['text'])):
-                    if int(data['conf'][i]) > 0:  # Only include words with confidence > 0
+                    conf = int(data['conf'][i])
+                    text_part = data['text'][i].strip()
+                    if conf >= (config.MIN_TEXT_CONFIDENCE * 100) and conf >= (config.MIN_BOX_CONFIDENCE * 100) and text_part:  # Tesseract confidence is 0-100
                         x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
                         boxes.append([[x, y], [x+w, y], [x+w, y+h], [x, y+h]])
+                        filtered_text_parts.append(text_part)
+                
+                # Use filtered text instead of original
+                if filtered_text_parts:
+                    text = '\n'.join(filtered_text_parts)
             except Exception:
                 pass  # If bounding box extraction fails, continue without boxes
             
@@ -386,8 +396,8 @@ class OCRManager:
                         # Add engine label near the first point
                         if len(points) > 0:
                             label_pos = (int(points[0][0][0]), max(int(points[0][0][1]) - 10, 15))
-                            cv2.putText(individual_image, engine_name, label_pos, 
-                                      cv2.FONT_HERSHEY_SIMPLEX, config.FONT_SCALE, color, config.FONT_THICKNESS, cv2.LINE_AA)
+                            # cv2.putText(individual_image, engine_name, label_pos, 
+                            #           cv2.FONT_HERSHEY_SIMPLEX, config.FONT_SCALE, color, config.FONT_THICKNESS, cv2.LINE_AA)
                 
                 # Save individual model image
                 individual_path = Path(output_folder) / f"{original_filename}_{engine_name.lower()}.{config.IMAGE_FORMAT}"
@@ -421,8 +431,8 @@ class OCRManager:
                         # Add engine label
                         if len(points) > 0:
                             label_pos = (int(points[0][0][0]), max(int(points[0][0][1]) - 10, 15))
-                            cv2.putText(comparison_image, engine_name, label_pos, 
-                                      cv2.FONT_HERSHEY_SIMPLEX, config.FONT_SCALE, color, config.FONT_THICKNESS, cv2.LINE_AA)
+                            # cv2.putText(comparison_image, engine_name, label_pos, 
+                            #           cv2.FONT_HERSHEY_SIMPLEX, config.FONT_SCALE, color, config.FONT_THICKNESS, cv2.LINE_AA)
             
             # Save comparison image
             comparison_path = Path(output_folder) / f"{original_filename}_comparison.{config.IMAGE_FORMAT}"
@@ -470,7 +480,7 @@ class OCRManager:
         return list(results)
 
     def display_results(self, results: List[Dict[str, Any]], show_text: bool = False):
-        table = Table(title="OCR Results")
+        table = Table(title="OCR Results", title_justify="left")
         table.add_column("Engine", style="cyan")
         table.add_column("Status", style="green")
         table.add_column("Time (s)", style="yellow")
