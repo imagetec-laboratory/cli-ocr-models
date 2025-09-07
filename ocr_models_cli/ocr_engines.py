@@ -317,6 +317,23 @@ class OCRManager:
             "tesseract": TesseractEngine()
         }
     
+    def get_image_dimensions(self, image_path: str) -> tuple:
+        """Get image dimensions (width, height)"""
+        try:
+            import cv2
+            img = cv2.imread(image_path)
+            if img is not None:
+                height, width = img.shape[:2]
+                return width, height
+            else:
+                # Try with PIL as fallback
+                from PIL import Image
+                with Image.open(image_path) as pil_img:
+                    return pil_img.size  # PIL returns (width, height)
+        except Exception as e:
+            console.print(f"[yellow]Could not get image dimensions for {image_path}: {str(e)}[/yellow]")
+            return None, None
+    
     def _clean_boxes_for_json(self, boxes: List) -> List:
         """Helper method to clean numpy arrays from boxes for JSON serialization"""
         clean_boxes = []
@@ -513,6 +530,9 @@ class OCRManager:
     def save_organized_results(self, results: List[Dict[str, Any]], image_path: str, output_folder: str) -> dict:
         """Save OCR results in organized format with NDJSON and images"""
         try:
+            # Get image dimensions
+            width, height = self.get_image_dimensions(image_path)
+            
             # Save NDJSON results
             original_filename = Path(image_path).stem
             ndjson_path = Path(output_folder) / f"{original_filename}_{config.NDJSON_PREFIX}.ndjson"
@@ -522,6 +542,8 @@ class OCRManager:
                 metadata = {
                     "type": "metadata",
                     "image_path": str(Path(image_path).resolve()),
+                    "image_width": width,
+                    "image_height": height,
                     "timestamp": time.time(),
                     "output_folder": output_folder,
                     "total_engines": len(results),
@@ -535,6 +557,8 @@ class OCRManager:
                     json_result = {
                         "type": "ocr_result",
                         "file_path": result.get("file_path", str(Path(image_path).resolve())),
+                        "image_width": width,
+                        "image_height": height,
                         "engine": result.get("engine", "unknown"),
                         "success": result.get("success", False),
                         "text": result.get("text", ""),

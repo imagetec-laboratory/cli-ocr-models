@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .ocr_engines import OCRManager
+from .ocr_engines import OCRManager, NumpyEncoder
 from . import config
 
 app = typer.Typer(help="OCR Models CLI - Run multiple OCR engines on images")
@@ -198,6 +198,23 @@ def all(
         output_folder = manager.create_output_folder_structure()
         all_results = []
         
+        # Prepare batch NDJSON file for incremental writing
+        folder_name = input_path_obj.name
+        batch_ndjson_path = Path(output_folder) / f"{folder_name}_batch_results.ndjson"
+        
+        # Write metadata as first line
+        with open(batch_ndjson_path, 'w') as f:
+            metadata = {
+                "type": "batch_metadata",
+                "input_directory": str(input_path_obj.resolve()),
+                "total_images": len(image_files),
+                "timestamp": time.time(),
+                "image_extensions": image_extensions
+            }
+            f.write(json.dumps(metadata, cls=NumpyEncoder) + '\n')
+        
+        console.print(f"[green]✓ Batch results will be saved incrementally to: {batch_ndjson_path}[/green]")
+        
         # Process each image
         for i, image_file in enumerate(image_files, 1):
             console.print(f"[cyan]Processing {i}/{len(image_files)}: {image_file.name}[/cyan]")
@@ -216,8 +233,33 @@ def all(
                 
                 all_results.extend(results)
                 
-                # Save organized results for each individual file in the batch
-                manager.save_organized_results(results, str(image_file), output_folder)
+                # Get image dimensions
+                width, height = manager.get_image_dimensions(str(image_file))
+                
+                # Append results to batch file immediately after processing each image
+                with open(batch_ndjson_path, 'a') as f:
+                    for result in results:
+                        # Clean result for JSON serialization
+                        boxes = result.get("boxes", [])
+                        clean_boxes = manager._clean_boxes_for_json(boxes)
+                        
+                        json_result = {
+                            "type": "ocr_result",
+                            "file_path": result.get("file_path"),
+                            "image_width": width,
+                            "image_height": height,
+                            "batch_index": result.get("batch_index"),
+                            "total_images": result.get("total_images"),
+                            "engine": result.get("engine", "unknown"),
+                            "success": result.get("success", False),
+                            "text": result.get("text", ""),
+                            "time": float(result.get("time", 0)),
+                            "boxes": clean_boxes,
+                            "error": result.get("error", None)
+                        }
+                        f.write(json.dumps(json_result, cls=NumpyEncoder) + '\n')
+                
+                console.print(f"[green]✓ Results for {image_file.name} saved to batch file[/green]")
                 
             except Exception as e:
                 console.print(f"[red]Error processing {image_file.name}: {str(e)}[/red]")
@@ -225,65 +267,7 @@ def all(
         # Display summary table for all results
         console.print(f"\n[bold green]Summary: Processed {len(image_files)} images[/bold green]")
         console.print(f"[green]Total OCR results: {len(all_results)}[/green]")
-        
-        # Save comprehensive batch results to organized folder
-        folder_name = input_path_obj.name
-        batch_ndjson_path = Path(output_folder) / f"{folder_name}_batch_results.ndjson"
-        
-        # Create a comprehensive NDJSON with metadata
-        try:
-            with open(batch_ndjson_path, 'w') as f:
-                # Write metadata as first line
-                metadata = {
-                    "type": "batch_metadata",
-                    "input_directory": str(input_path_obj.resolve()),
-                    "total_images": len(image_files),
-                    "total_results": len(all_results),
-                    "timestamp": time.time(),
-                    "image_extensions": image_extensions
-                }
-                from .ocr_engines import NumpyEncoder
-                f.write(json.dumps(metadata, cls=NumpyEncoder) + '\n')
-                
-                # Write all results
-                for result in all_results:
-                    # Clean result for JSON serialization
-                    boxes = result.get("boxes", [])
-                    clean_boxes = []
-                    for box in boxes:
-                        if hasattr(box, 'tolist'):
-                            clean_boxes.append(box.tolist())
-                        elif isinstance(box, list):
-                            clean_box = []
-                            for item in box:
-                                if hasattr(item, 'tolist'):
-                                    clean_box.append(item.tolist())
-                                elif hasattr(item, 'item'):
-                                    clean_box.append(item.item())
-                                else:
-                                    clean_box.append(item)
-                            clean_boxes.append(clean_box)
-                        else:
-                            clean_boxes.append(box)
-                    
-                    json_result = {
-                        "type": "ocr_result",
-                        "file_path": result.get("file_path"),
-                        "batch_index": result.get("batch_index"),
-                        "total_images": result.get("total_images"),
-                        "engine": result.get("engine", "unknown"),
-                        "success": result.get("success", False),
-                        "text": result.get("text", ""),
-                        "time": float(result.get("time", 0)),
-                        "boxes": clean_boxes,
-                        "error": result.get("error", None)
-                    }
-                    f.write(json.dumps(json_result, cls=NumpyEncoder) + '\n')
-            
-            console.print(f"[green]✓ Batch results saved to: {batch_ndjson_path}[/green]")
-            
-        except Exception as e:
-            console.print(f"[red]Error saving batch results: {str(e)}[/red]")
+        console.print(f"[green]✓ All results saved incrementally to: {batch_ndjson_path}[/green]")
     
     else:
         console.print(f"[red]Error: '{input_path}' is neither a file nor a directory[/red]")
