@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 import uuid
 from datetime import datetime
+from . import config
 
 console = Console()
 
@@ -28,7 +29,7 @@ class NumpyEncoder(json.JSONEncoder):
 class OCREngine:
     def __init__(self, name: str):
         self.name = name
-        self.color = (255, 0, 0)  # Default red color for bounding boxes
+        self.color = config.COLORS.get(name.lower(), (255, 0, 0))
 
     def extract_text(self, image_path: str) -> Dict[str, Any]:
         raise NotImplementedError
@@ -44,7 +45,7 @@ class PaddleOCREngine(OCREngine):
     def __init__(self):
         super().__init__("PaddleOCR")
         self._ocr = None
-        self.color = (255, 0, 0)  # Red for PaddleOCR
+        self.color = config.COLORS.get("paddle", (255, 0, 0))
 
     def _load_model(self):
         if self._ocr is None:
@@ -52,7 +53,7 @@ class PaddleOCREngine(OCREngine):
                 import paddleocr
                 console.print(f"[yellow]PaddleOCR version: {paddleocr.__version__ if hasattr(paddleocr, '__version__') else 'unknown'}[/yellow]")
                 from paddleocr import PaddleOCR
-                self._ocr = PaddleOCR(lang='en', show_log=False)
+                self._ocr = PaddleOCR(lang=config.PADDLE_LANG, use_gpu=config.USE_GPU, use_mp=config.PADDLE_USE_MP, show_log=False)
             except ImportError as e:
                 console.print(f"[red]PaddleOCR import error: {str(e)}[/red]")
                 console.print("[red]Install with: uv add paddleocr paddlepaddle[/red]")
@@ -202,13 +203,13 @@ class EasyOCREngine(OCREngine):
     def __init__(self):
         super().__init__("EasyOCR")
         self._reader = None
-        self.color = (0, 255, 0)  # Green for EasyOCR
+        self.color = config.COLORS.get("easyocr", (0, 255, 0))
 
     def _load_model(self):
         if self._reader is None:
             try:
                 import easyocr
-                self._reader = easyocr.Reader(['en'])
+                self._reader = easyocr.Reader(config.EASYOCR_LANG, gpu=config.USE_GPU)
             except ImportError:
                 console.print("[red]EasyOCR not available. Install with: uv add easyocr[/red]")
                 return False
@@ -247,7 +248,7 @@ class EasyOCREngine(OCREngine):
 class TesseractEngine(OCREngine):
     def __init__(self):
         super().__init__("Tesseract")
-        self.color = (0, 0, 255)  # Blue for Tesseract
+        self.color = config.COLORS.get("tesseract", (0, 0, 255))
 
     def extract_text(self, image_path: str) -> Dict[str, Any]:
         start_time = time.time()
@@ -336,7 +337,7 @@ class OCRManager:
         uuid_str = str(uuid.uuid4())
         
         # Create the folder path relative to current working directory
-        folder_path = Path.cwd() / "results" / year / month / day / uuid_str
+        folder_path = Path.cwd() / config.OUTPUT_DIR / year / month / day / uuid_str
         folder_path.mkdir(parents=True, exist_ok=True)
         
         console.print(f"[blue]Created output folder: {folder_path}[/blue]")
@@ -380,16 +381,16 @@ class OCRManager:
                 for box in boxes:
                     if len(box) >= 4:
                         points = np.array(box, dtype=np.int32).reshape((-1, 1, 2))
-                        cv2.polylines(individual_image, [points], isClosed=True, color=color, thickness=2)
+                        cv2.polylines(individual_image, [points], isClosed=True, color=color, thickness=config.BOX_LINE_THICKNESS)
                         
                         # Add engine label near the first point
                         if len(points) > 0:
                             label_pos = (int(points[0][0][0]), max(int(points[0][0][1]) - 10, 15))
                             cv2.putText(individual_image, engine_name, label_pos, 
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+                                      cv2.FONT_HERSHEY_SIMPLEX, config.FONT_SCALE, color, config.FONT_THICKNESS, cv2.LINE_AA)
                 
                 # Save individual model image
-                individual_path = Path(output_folder) / f"{original_filename}_{engine_name.lower()}.png"
+                individual_path = Path(output_folder) / f"{original_filename}_{engine_name.lower()}.{config.IMAGE_FORMAT}"
                 cv2.imwrite(str(individual_path), cv2.cvtColor(individual_image, cv2.COLOR_RGB2BGR))
                 individual_results.append(str(individual_path))
                 console.print(f"[green]✓ {engine_name} image saved to: {individual_path}[/green]")
@@ -415,16 +416,16 @@ class OCRManager:
                 for box in boxes:
                     if len(box) >= 4:
                         points = np.array(box, dtype=np.int32).reshape((-1, 1, 2))
-                        cv2.polylines(comparison_image, [points], isClosed=True, color=color, thickness=2)
+                        cv2.polylines(comparison_image, [points], isClosed=True, color=color, thickness=config.BOX_LINE_THICKNESS)
                         
                         # Add engine label
                         if len(points) > 0:
                             label_pos = (int(points[0][0][0]), max(int(points[0][0][1]) - 10, 15))
                             cv2.putText(comparison_image, engine_name, label_pos, 
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+                                      cv2.FONT_HERSHEY_SIMPLEX, config.FONT_SCALE, color, config.FONT_THICKNESS, cv2.LINE_AA)
             
             # Save comparison image
-            comparison_path = Path(output_folder) / f"{original_filename}_comparison.png"
+            comparison_path = Path(output_folder) / f"{original_filename}_comparison.{config.IMAGE_FORMAT}"
             cv2.imwrite(str(comparison_path), cv2.cvtColor(comparison_image, cv2.COLOR_RGB2BGR))
             console.print(f"[green]✓ Comparison image saved to: {comparison_path}[/green]")
             
@@ -504,7 +505,7 @@ class OCRManager:
         try:
             # Save NDJSON results
             original_filename = Path(image_path).stem
-            ndjson_path = Path(output_folder) / f"{original_filename}_results.ndjson"
+            ndjson_path = Path(output_folder) / f"{original_filename}_{config.NDJSON_PREFIX}.ndjson"
             
             with open(ndjson_path, 'w') as f:
                 # Add metadata as first line

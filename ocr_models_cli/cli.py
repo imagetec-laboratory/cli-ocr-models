@@ -10,6 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .ocr_engines import OCRManager
+from . import config
 
 app = typer.Typer(help="OCR Models CLI - Run multiple OCR engines on images")
 console = Console()
@@ -139,7 +140,7 @@ def all(
     input_path: str = typer.Argument(..., help="Path to image file or directory containing images"),
     async_mode: bool = typer.Option(True, "--async/--sync", help="Run OCR engines concurrently (faster)"),
     show_text: bool = typer.Option(False, "--show-text", help="Display extracted text in results table"),
-    image_extensions: str = typer.Option("jpg,jpeg,png,bmp,tiff,tif,webp", help="Comma-separated image extensions for folder processing")
+    image_extensions: str = typer.Option(",".join(config.IMAGE_EXTENSIONS), help="Comma-separated image extensions for folder processing")
 ):
     """Run all OCR engines on an image file or all images in a directory"""
     input_path_obj = Path(input_path)
@@ -293,7 +294,7 @@ def all(
 def batch_async(
     image_dir: str = typer.Argument(..., help="Directory containing images to process"),
     output_file: str = typer.Argument(..., help="Output NDJSON file path"),
-    image_extensions: str = typer.Option("jpg,jpeg,png,bmp,tiff,tif,webp", help="Comma-separated image extensions")
+    image_extensions: str = typer.Option(",".join(config.IMAGE_EXTENSIONS), help="Comma-separated image extensions")
 ):
     """Process multiple images asynchronously and save all results to one NDJSON file"""
     image_dir_path = Path(image_dir)
