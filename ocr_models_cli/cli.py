@@ -153,10 +153,22 @@ def all(
         console.print(f"\n[bold green]Summary: Processed {len(image_files)} images[/bold green]")
         console.print(f"[green]Total OCR results: {len(all_results)}[/green]")
         console.print(f"[green]✓ All results saved incrementally to: {batch_ndjson_path}[/green]")
+        
+        # Cleanup OCR engines to free memory
+        manager.cleanup_engines()
 
     else:
         console.print(f"[red]Error: '{input_path}' is neither a file nor a directory[/red]")
         raise typer.Exit(1)
+    
+    # Final cleanup to ensure memory is released
+    try:
+        if 'manager' in locals():
+            manager.cleanup_engines()
+        import gc
+        gc.collect()
+    except:
+        pass
 
 
 @app.command()

@@ -65,9 +65,15 @@ class PaddleOCREngine(OCREngine):
 
     def _preprocess_image(self, image_path: str) -> str:
         """Preprocess image for better OCR compatibility"""
+        img = None
+        gray = None
+        enhanced = None
+        pil_img = None
+        
         try:
             import cv2
             import numpy as np
+            import gc
             
             # Read image with different modes for compatibility
             img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
@@ -80,12 +86,15 @@ class PaddleOCREngine(OCREngine):
                         console.print(f"[yellow]Could not load image with OpenCV, trying with PIL...[/yellow]")
                         # Try with PIL as fallback
                         from PIL import Image as PILImage
-                        pil_img = PILImage.open(image_path)
-                        img = np.array(pil_img)
-                        if len(img.shape) == 3 and img.shape[2] == 4:  # RGBA
-                            img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
-                        elif len(img.shape) == 3:  # RGB
-                            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                        try:
+                            with PILImage.open(image_path) as pil_img:
+                                img = np.array(pil_img.copy())
+                                if len(img.shape) == 3 and img.shape[2] == 4:  # RGBA
+                                    img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+                                elif len(img.shape) == 3:  # RGB
+                                    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                        finally:
+                            pil_img = None  # Explicitly clear PIL reference
             
             if img is None:
                 return image_path  # Return original path if can't load
@@ -94,7 +103,11 @@ class PaddleOCREngine(OCREngine):
             if len(img.shape) == 3:
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             else:
-                gray = img
+                gray = img.copy()
+            
+            # Clear original image from memory immediately
+            img = None
+            gc.collect()
             
             # Ensure we have a valid grayscale image
             if gray is None or gray.size == 0:
@@ -105,15 +118,26 @@ class PaddleOCREngine(OCREngine):
                 # Normalize to 0-255 range
                 gray_norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
                 gray = gray_norm.astype(np.uint8)
+                gray_norm = None  # Clear intermediate array
+                gc.collect()
             
             # Apply adaptive histogram equalization for better contrast
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
             enhanced = clahe.apply(gray)
             
+            # Clear gray image from memory
+            gray = None
+            clahe = None
+            gc.collect()
+            
             # Save preprocessed image temporarily
             import os
             temp_path = os.path.splitext(image_path)[0] + '_paddle_processed.jpg'
             cv2.imwrite(temp_path, enhanced)
+            
+            # Clear enhanced image from memory
+            enhanced = None
+            gc.collect()
             
             # Verify the temporary image was created successfully
             if not os.path.exists(temp_path):
@@ -124,6 +148,14 @@ class PaddleOCREngine(OCREngine):
         except Exception as e:
             console.print(f"[yellow]Image preprocessing failed: {str(e)}, using original[/yellow]")
             return image_path
+        finally:
+            # Ensure all arrays are cleared from memory
+            import gc
+            img = None
+            gray = None 
+            enhanced = None
+            pil_img = None
+            gc.collect()
 
     def extract_text(self, image_path: str) -> Dict[str, Any]:
         if not self._load_model():
@@ -217,11 +249,16 @@ class EasyOCREngine(OCREngine):
 
     def extract_text(self, image_path: str) -> Dict[str, Any]:
         if not self._load_model():
-            return {"error": "EasyOCR not available", "text": "", "time": 0}
+            return {"error": "EasyOCR not available", "text": "", "time": 0, "success": False, "boxes": []}
         
         start_time = time.time()
+        results = None
+        filtered_results = None
+        
         try:
+            import gc
             results = self._reader.readtext(image_path)
+            
             # Filter results based on confidence thresholds
             filtered_results = [result for result in results if result[2] >= config.MIN_TEXT_CONFIDENCE and result[2] >= config.MIN_BOX_CONFIDENCE]
             text = "\n".join([result[1] for result in filtered_results])
@@ -245,6 +282,12 @@ class EasyOCREngine(OCREngine):
                 "success": False,
                 "boxes": []
             }
+        finally:
+            # Clear results from memory
+            import gc
+            results = None
+            filtered_results = None
+            gc.collect()
 
 
 class TesseractEngine(OCREngine):
@@ -254,31 +297,40 @@ class TesseractEngine(OCREngine):
 
     def extract_text(self, image_path: str) -> Dict[str, Any]:
         start_time = time.time()
+        image = None
+        data = None
+        
         try:
             import pytesseract
             from PIL import Image
+            import gc
             
-            image = Image.open(image_path)
-            text = pytesseract.image_to_string(image)
-            
-            # Get bounding box data from Tesseract
-            boxes = []
-            filtered_text_parts = []
-            try:
-                data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
-                for i in range(len(data['text'])):
-                    conf = int(data['conf'][i])
-                    text_part = data['text'][i].strip()
-                    if conf >= (config.MIN_TEXT_CONFIDENCE * 100) and conf >= (config.MIN_BOX_CONFIDENCE * 100) and text_part:  # Tesseract confidence is 0-100
-                        x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
-                        boxes.append([[x, y], [x+w, y], [x+w, y+h], [x, y+h]])
-                        filtered_text_parts.append(text_part)
+            with Image.open(image_path) as image:
+                text = pytesseract.image_to_string(image)
                 
-                # Use filtered text instead of original
-                if filtered_text_parts:
-                    text = '\n'.join(filtered_text_parts)
-            except Exception:
-                pass  # If bounding box extraction fails, continue without boxes
+                # Get bounding box data from Tesseract
+                boxes = []
+                filtered_text_parts = []
+                try:
+                    data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+                    for i in range(len(data['text'])):
+                        conf = int(data['conf'][i])
+                        text_part = data['text'][i].strip()
+                        if conf >= (config.MIN_TEXT_CONFIDENCE * 100) and conf >= (config.MIN_BOX_CONFIDENCE * 100) and text_part:  # Tesseract confidence is 0-100
+                            x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
+                            boxes.append([[x, y], [x+w, y], [x+w, y+h], [x, y+h]])
+                            filtered_text_parts.append(text_part)
+                    
+                    # Use filtered text instead of original
+                    if filtered_text_parts:
+                        text = '\n'.join(filtered_text_parts)
+                        
+                    # Clear data immediately after processing
+                    data = None
+                    gc.collect()
+                        
+                except Exception:
+                    pass  # If bounding box extraction fails, continue without boxes
             
             processing_time = time.time() - start_time
             
@@ -307,6 +359,12 @@ class TesseractEngine(OCREngine):
                 "success": False,
                 "boxes": []
             }
+        finally:
+            # Ensure memory is cleared
+            import gc
+            image = None
+            data = None
+            gc.collect()
 
 
 class OCRManager:
@@ -316,6 +374,24 @@ class OCRManager:
             "easyocr": EasyOCREngine(),
             "tesseract": TesseractEngine()
         }
+    
+    def cleanup_engines(self):
+        """Release memory held by OCR engines"""
+        import gc
+        for engine in self.engines.values():
+            if hasattr(engine, '_ocr'):
+                engine._ocr = None
+            if hasattr(engine, '_reader'):
+                engine._reader = None
+        gc.collect()
+        console.print("[blue]✓ OCR engines memory released[/blue]")
+    
+    def __del__(self):
+        """Ensure cleanup when OCRManager is destroyed"""
+        try:
+            self.cleanup_engines()
+        except:
+            pass
     
     def get_image_dimensions(self, image_path: str) -> tuple:
         """Get image dimensions (width, height)"""
@@ -372,7 +448,14 @@ class OCRManager:
 
     def create_organized_output(self, image_path: str, results: List[Dict[str, Any]], output_folder: str):
         """Create organized output with individual model images and comparison image"""
+        image = None
+        image_rgb = None
+        individual_image = None
+        comparison_image = None
+        
         try:
+            import gc
+            
             # Load original image
             image = cv2.imread(image_path)
             if image is None:
@@ -381,6 +464,10 @@ class OCRManager:
             
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             original_filename = Path(image_path).stem
+            
+            # Clear original image from memory immediately
+            image = None
+            gc.collect()
             
             # Create individual images for each model
             individual_results = []
@@ -421,6 +508,10 @@ class OCRManager:
                 cv2.imwrite(str(individual_path), cv2.cvtColor(individual_image, cv2.COLOR_RGB2BGR))
                 individual_results.append(str(individual_path))
                 console.print(f"[green]✓ {engine_name} image saved to: {individual_path}[/green]")
+                
+                # Clear individual image from memory
+                individual_image = None
+                gc.collect()
             
             # Create comparison image with all engines
             comparison_image = image_rgb.copy()
@@ -465,6 +556,14 @@ class OCRManager:
         except Exception as e:
             console.print(f"[red]Error creating organized output: {str(e)}[/red]")
             return {"success": False, "error": str(e)}
+        finally:
+            # Ensure all images are cleared from memory
+            import gc
+            image = None
+            image_rgb = None
+            individual_image = None
+            comparison_image = None
+            gc.collect()
 
     def preload_engine(self, engine_name: str) -> bool:
         """Preload a specific OCR engine to reduce initialization time"""
@@ -501,16 +600,27 @@ class OCRManager:
         """Run all OCR engines concurrently using asyncio"""
         console.print("[blue]Running all OCR engines concurrently...[/blue]")
         
-        # Create tasks for all engines
         tasks = []
-        for engine in self.engines.values():
-            task = engine.extract_text_async(image_path)
-            tasks.append(task)
+        results = []
         
-        # Run all tasks concurrently
-        results = await asyncio.gather(*tasks)
-        
-        return list(results)
+        try:
+            import gc
+            
+            # Create tasks for all engines
+            for engine in self.engines.values():
+                task = engine.extract_text_async(image_path)
+                tasks.append(task)
+            
+            # Run all tasks concurrently
+            results = await asyncio.gather(*tasks)
+            
+            return list(results)
+            
+        finally:
+            # Clear tasks and trigger garbage collection
+            import gc
+            tasks = None
+            gc.collect()
 
     def display_results(self, results: List[Dict[str, Any]], show_text: bool = False):
         table = Table(title="OCR Results", title_justify="left")
