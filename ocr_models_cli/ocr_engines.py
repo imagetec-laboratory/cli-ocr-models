@@ -53,7 +53,23 @@ class PaddleOCREngine(OCREngine):
                 import paddleocr
                 console.print(f"[yellow]PaddleOCR version: {paddleocr.__version__ if hasattr(paddleocr, '__version__') else 'unknown'}[/yellow]")
                 from paddleocr import PaddleOCR
-                self._ocr = PaddleOCR(lang=config.PADDLE_LANG, use_gpu=config.USE_GPU, use_mp=config.PADDLE_USE_MP, show_log=False)
+                
+                # Try with original settings first
+                try:
+                    self._ocr = PaddleOCR(lang=config.PADDLE_LANG, use_gpu=config.USE_GPU, use_mp=config.PADDLE_USE_MP, show_log=False)
+                    console.print("[green]PaddleOCR loaded with original settings[/green]")
+                except Exception as gpu_error:
+                    console.print(f"[yellow]GPU/MP initialization failed: {str(gpu_error)}[/yellow]")
+                    console.print("[yellow]Trying CPU-only fallback...[/yellow]")
+                    
+                    # Fallback to CPU-only with no multiprocessing
+                    try:
+                        self._ocr = PaddleOCR(lang=config.PADDLE_LANG, use_gpu=False, use_mp=False, show_log=False)
+                        console.print("[green]PaddleOCR loaded with CPU fallback[/green]")
+                    except Exception as cpu_error:
+                        console.print(f"[red]CPU fallback also failed: {str(cpu_error)}[/red]")
+                        return False
+                        
             except ImportError as e:
                 console.print(f"[red]PaddleOCR import error: {str(e)}[/red]")
                 console.print("[red]Install with: uv add paddleocr paddlepaddle[/red]")
@@ -172,7 +188,24 @@ class PaddleOCREngine(OCREngine):
                 console.print(f"[yellow]Image preprocessing failed: {str(preprocess_error)}, using original[/yellow]")
                 processed_image_path = image_path
             
-            result = self._ocr.ocr(img=processed_image_path, cls=False)
+            # Try OCR with error handling for primitive execution errors
+            try:
+                result = self._ocr.ocr(img=processed_image_path, cls=False)
+            except Exception as ocr_error:
+                # Check if it's a primitive execution error
+                if "could not execute a primitive" in str(ocr_error):
+                    console.print("[yellow]PaddleOCR primitive execution error, reinitializing with CPU fallback...[/yellow]")
+                    # Force reinitialize with CPU-only settings
+                    self._ocr = None
+                    try:
+                        from paddleocr import PaddleOCR
+                        self._ocr = PaddleOCR(lang=config.PADDLE_LANG, use_gpu=False, use_mp=False, show_log=False)
+                        console.print("[green]PaddleOCR reinitialized with CPU-only mode[/green]")
+                        result = self._ocr.ocr(img=processed_image_path, cls=False)
+                    except Exception as fallback_error:
+                        raise Exception(f"Both GPU and CPU fallback failed: {str(fallback_error)}")
+                else:
+                    raise ocr_error
                 
             text = ""
             boxes = []

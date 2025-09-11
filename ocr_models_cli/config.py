@@ -5,7 +5,7 @@ TESSERACT_LANG = 'eng'
 
 # GPU Settings
 USE_GPU = True
-PADDLE_USE_MP = True
+PADDLE_USE_MP = False
 
 # Output Settings
 OUTPUT_DIR = "results"
